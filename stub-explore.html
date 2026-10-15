@@ -89,6 +89,20 @@
     if (url.indexOf('/jff-api/contents') > -1) {
       window.__fetchLog.push('contents');
       if (window.__mock.catalogue === 'fail') return Promise.resolve(new Response('', { status: 500 }));
+      if (window.__mock.catalogue === 'hang' || window.__mock.catalogue === 'slow') {
+        // behave like a real stalled-but-abortable fetch: resolves late, or rejects on abort
+        const delay = window.__mock.catalogue === 'slow' ? 3000 : 30000;
+        return new Promise(function (resolve, reject) {
+          const t = setTimeout(function () {
+            resolve(new Response(JSON.stringify({ data: window.__catalogue }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+          }, delay);
+          const sig = init && init.signal;
+          if (sig) sig.addEventListener('abort', function () {
+            clearTimeout(t);
+            const err = new Error('The operation was aborted.'); err.name = 'AbortError'; reject(err);
+          });
+        });
+      }
       return Promise.resolve(new Response(JSON.stringify({ data: window.__catalogue }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     }
     return realFetch(input, init);

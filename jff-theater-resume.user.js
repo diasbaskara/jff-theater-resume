@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         JFF Theater — Explore, Resume + Playback Controls
 // @namespace    https://github.com/diasbaskara
-// @version      1.3.0
-// @description  Netflix-style browse page for the JFF Theater catalogue (Continue watching, Available now, Ending soon, search), plus resume and touch playback controls on the film pages. Reads the site's own public catalogue API; collects nothing, downloads no media, circumvents no DRM.
+// @version      1.4.0
+// @description  Optional Netflix-style browse view for the JFF Theater catalogue (Continue watching, Available now, Ending soon, search) plus resume and touch playback controls on the film pages. The site's own listing is untouched unless you tap Explore. Reads the site's own public catalogue API; collects nothing, downloads no media, circumvents no DRM.
 // @author       Hermes Agent (for Dias)
 // @license      MIT
 // @icon         data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23111' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8'/%3E%3Cpath d='M3 3v5h5'/%3E%3C/svg%3E
@@ -47,6 +47,8 @@
     } catch (e) { return ''; }
   })();
   const log = (...a) => console.log('[jff-resume]', ...a);
+  // Silent promise rejections are invisible on a phone; make them show up in the log.
+  window.addEventListener('unhandledrejection', (e) => log('unhandled rejection', (e.reason && e.reason.message) || e.reason));
 
   // ---------------------------------------------------------------- storage
   // One JSON map for every film, so a single key covers the whole site.
@@ -466,11 +468,13 @@
   const CATALOGUE_API = '/jff-api/contents';
   const CACHE_KEY = 'jff:explore:index:v2';
   const COUNTRY_KEY = 'jff:explore:country';
-  const CLASSIC_KEY = 'jff:explore:classic';
+  const ACTIVE_KEY = 'jff:explore:active';   // '1' = the explore view is the chosen mode
   const CACHE_TTL = 6 * 60 * 60 * 1000;
   const DAY = 86400000;
 
   const EX_ICON = {
+    grid: stroked('<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/>' +
+                  '<rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>'),
     search: stroked('<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>'),
     refresh: stroked('<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>' +
                      '<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>'),
@@ -523,13 +527,24 @@
     };
   }
 
+  async function fetchJson(url, ms) {
+    const ac = new AbortController();
+    const to = setTimeout(() => ac.abort(), ms);
+    try {
+      const r = await fetch(url, { credentials: 'include', headers: { Accept: 'application/json' }, signal: ac.signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    } catch (e) {
+      if (e && e.name === 'AbortError') throw new Error('timed out after ' + Math.round(ms / 1000) + 's');
+      throw e;
+    } finally { clearTimeout(to); }
+  }
+
   // The site only knows the viewer's country once they are signed in, so mirror that first and
   // fall back to a timezone/locale guess for signed-out browsing.
   async function sessionCountry() {
     try {
-      const r = await fetch('/jff-api/auth/me', { credentials: 'include', headers: { Accept: 'application/json' } });
-      if (!r.ok) return '';
-      const j = await r.json();
+      const j = await fetchJson('/jff-api/auth/me', 8000);
       const d = (j && j.data) || j || {};
       const c = d.currentCountry || d.country || d.currentCountryCode || '';
       return c ? String(c).toLowerCase() : '';
@@ -558,13 +573,14 @@
       log('catalogue from cache', cached.items.length);
       return { items: cached.items, at: cached.at, cached: true };
     }
-    const r = await fetch(CATALOGUE_API, { credentials: 'include', headers: { Accept: 'application/json' } });
-    if (!r.ok) throw new Error('catalogue HTTP ' + r.status);
-    const j = await r.json();
+    // ~7 MB on the wire, so give it room — but never wait forever: a stalled request used to leave
+    // the page blank with no message at all.
+    const t0 = Date.now();
+    const j = await fetchJson(CATALOGUE_API, 25000);
     const rows = Array.isArray(j) ? j : (j.data || []);
     const items = rows.map(trimEntry).filter((x) => x.title && x.path);
+    log('catalogue fetched', items.length, 'in', Date.now() - t0, 'ms');
     writeCache(items);
-    log('catalogue fetched', items.length);
     return { items, at: Date.now(), cached: false };
   }
 
@@ -592,6 +608,31 @@
     const st = document.createElement('style');
     st.id = 'jff-x-style';
     st.textContent = `
+#jff-x-open {
+  position: fixed !important; left: 8px !important;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px)) !important;
+  z-index: 2147483647 !important; display: flex !important; align-items: center !important; gap: 2px !important;
+  padding: 4px 6px 4px 12px !important; border-radius: 999px !important;
+  border: 1px solid rgba(255,255,255,.16) !important;
+  background: rgba(14,14,16,.82) !important; color: #fff !important;
+  -webkit-backdrop-filter: blur(10px) !important; backdrop-filter: blur(10px) !important;
+  box-shadow: 0 3px 14px rgba(0,0,0,.35) !important;
+  font: 600 13px/1 -apple-system, system-ui, sans-serif !important;
+}
+#jff-x-open button {
+  -webkit-appearance: none !important; appearance: none !important;
+  background: transparent !important; border: 0 !important; box-shadow: none !important;
+  color: inherit !important; cursor: pointer !important; font: inherit !important;
+  letter-spacing: 0 !important; padding: 0 !important; margin: 0 !important;
+  height: 30px !important; display: flex !important; align-items: center !important; gap: 7px !important;
+  touch-action: manipulation !important; -webkit-tap-highlight-color: transparent !important;
+}
+#jff-x-open .jff-x-openclose { width: 26px !important; justify-content: center !important; color: #9d9dab !important; }
+#jff-x-open svg {
+  width: 17px !important; height: 17px !important; min-width: 17px !important; max-width: 17px !important;
+  min-height: 17px !important; max-height: 17px !important; display: block !important; fill: none !important;
+  stroke: currentColor !important; stroke-width: 2 !important; stroke-linecap: round !important; stroke-linejoin: round !important;
+}
 #jff-x-root {
   box-sizing: border-box !important; max-width: 1400px !important; margin: 18px auto !important;
   padding: 18px 16px 26px !important; border-radius: 16px !important;
@@ -730,7 +771,8 @@
     if (!isListingPage) return;
     if (document.getElementById('jff-x-root')) return;
 
-    const state = { items: [], at: 0, country: storedCountry(), q: '', filter: 'all', hist: {}, loading: true, error: '' };
+    const state = { items: [], at: 0, country: storedCountry(), q: '', filter: 'all', hist: {},
+                    loading: true, loaded: false, active: false, pillHidden: false, error: '' };
 
     const root = document.createElement('div');
     root.id = 'jff-x-root';
@@ -746,12 +788,13 @@
         '</div>' +
       '</div>' +
       '<div class="jff-x-chips" id="jff-x-chips"></div>' +
-      '<div id="jff-x-body"><div class="jff-x-empty">Loading the catalogue…</div></div>' +
+      '<div id="jff-x-body"><div class="jff-x-empty">Loading the catalogue… first visit pulls about 7 MB; afterwards it is cached for six hours.</div></div>' +
       '<div class="jff-x-status" id="jff-x-status"></div>';
 
     injectExploreStyle();
+    root.style.setProperty('display', 'none', 'important');
     mountExplore(root);
-    if (localStorage.getItem(CLASSIC_KEY) === '1') { setClassic(true); return; }
+    buildOpenPill();
 
     const body = root.querySelector('#jff-x-body');
     const statusEl = root.querySelector('#jff-x-status');
@@ -857,7 +900,7 @@
           .sort((a, b) => Date.parse(a.start) - Date.parse(b.start)).slice(0, 30);
 
         body.innerHTML =
-          (state.loading ? '<div class="jff-x-empty">Loading…</div>' : '') +
+          (state.loading ? '<div class="jff-x-empty">Loading the catalogue… first visit pulls about 7 MB; afterwards it is cached for six hours.</div>' : '') +
           rowHTML('Continue watching', started.slice(0, 24), state.country, now, state.hist) +
           rowHTML('Available now', nowRow, state.country, now, state.hist, countFor('now')) +
           rowHTML('Ending soon', soonRow, state.country, now, state.hist, countFor('soon')) +
@@ -876,14 +919,81 @@
           ' · positions stored locally by this script: <b>' + Object.keys(state.hist).length + '</b>';
     }
 
-    function setClassic(on) {
-      try { localStorage.setItem(CLASSIC_KEY, on ? '1' : '0'); } catch (e) {}
-      root.style.setProperty('display', on ? 'none' : 'block', 'important');
+    function prefActive() { try { return localStorage.getItem(ACTIVE_KEY) === '1'; } catch (e) { return false; } }
+    function prefActiveSet(on) { try { localStorage.setItem(ACTIVE_KEY, on ? '1' : '0'); } catch (e) {} }
+
+    // Paint the current mode. The explore view is only shown once its data has actually loaded, so a
+    // failed or slow catalogue can never leave the user looking at an empty page.
+    function apply() {
+      const shown = state.active && state.loaded;
+      root.style.setProperty('display', shown ? 'block' : 'none', 'important');
       const app = document.getElementById('movieApp');
-      if (app) app.style.setProperty('display', on ? '' : 'none', 'important');
+      if (app) app.style.setProperty('display', shown ? 'none' : '', 'important');
+      const pill = document.getElementById('jff-x-open');
+      if (pill) pill.style.setProperty('display', (!state.active && !state.pillHidden) ? 'flex' : 'none', 'important');
       const btn = root.querySelector('#jff-x-classic');
-      if (btn) btn.textContent = on ? 'Explore view' : 'Classic view';
-      if (btn) btn.onclick = () => setClassic(!on);
+      if (btn && !btn.dataset.jffWired) {
+        btn.dataset.jffWired = '1';
+        btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); classic(); });
+      }
+    }
+
+    function buildOpenPill() {
+      if (document.getElementById('jff-x-open') || !document.body) return;
+      const pill = document.createElement('div');
+      pill.id = 'jff-x-open';
+      pill.innerHTML =
+        '<button type="button" class="jff-x-openmain" aria-label="Open the explore view">' +
+          EX_ICON.grid + '<span>Explore</span></button>' +
+        '<button type="button" class="jff-x-openclose" aria-label="Hide this button for now">' + ICON.hide + '</button>';
+      pill.querySelector('.jff-x-openmain').addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        activate();
+      });
+      pill.querySelector('.jff-x-openclose').addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        state.pillHidden = true;                    // this page view only; a reload brings it back
+        apply();
+      });
+      document.body.appendChild(pill);
+    }
+
+    async function activate() {
+      state.active = true;
+      state.pillHidden = false;
+      prefActiveSet(true);
+      apply();
+      if (state.loaded) { render(); apply(); return; }
+      body.innerHTML = '<div class="jff-x-empty">Loading the catalogue… first visit pulls about 7 MB; afterwards it is cached for six hours.</div>';
+      state.hist = await viewingHistory();
+      const cached = readCache();
+      if (cached) {
+        state.items = cached.items; state.at = cached.at; state.loaded = true; state.loading = false;
+        paintCountry(); render(); apply();
+      }
+      if (state.country === null) {
+        const detected = (await sessionCountry()) || guessCountry();
+        state.country = detected || '';
+        if (detected) { try { localStorage.setItem(COUNTRY_KEY, detected); } catch (e) {} }
+      }
+      try {
+        const res = await fetchCatalogue(false);
+        state.items = res.items; state.at = res.at; state.loaded = true; state.loading = false;
+        paintCountry(); render(); apply();
+      } catch (err) {
+        state.active = false;
+        state.loading = false;
+        prefActiveSet(false);
+        state.error = err.message || String(err);
+        apply();
+        toast('Explore view unavailable (' + state.error + ') — the site\'s own list stays on screen.');
+      }
+    }
+
+    function classic() {
+      state.active = false;
+      prefActiveSet(false);
+      apply();
     }
 
     root.addEventListener('click', (e) => {
@@ -925,45 +1035,29 @@
       }
     });
 
-    // load
-    (async () => {
-      state.hist = await viewingHistory();
-      const cached = readCache();
-      if (cached) { state.items = cached.items; state.at = cached.at; state.loading = false; paintCountry(); render(); }
-      if (state.country === null) {
-        const detected = (await sessionCountry()) || guessCountry();
-        state.country = detected || '';
-        if (detected) { try { localStorage.setItem(COUNTRY_KEY, detected); } catch (e) {} }
-      }
-      try {
-        const res = await fetchCatalogue(false);
-        state.items = res.items; state.at = res.at; state.loading = false;
-        paintCountry(); render();
-      } catch (err) {
-        state.loading = false;
-        state.error = err.message || String(err);
-        render();
-      }
-    })();
-
-    setClassic(false);
+    // The catalogue is fetched only when the explore view is actually opened — see activate().
+    // The site's own listing is left exactly as it is until that data has arrived: 7 MB over a slow
+    // link must never leave the user looking at a blank page.
+    apply();
+    if (prefActive()) {
+      activate().catch((e) => { log('activate failed', e); state.active = false; apply(); });
+    }
   }
 
   function mountExplore(root) {
+    // Insert without touching the site's own listing — hiding it is apply()'s job, and only once
+    // the catalogue has loaded.
     const host = document.getElementById('movieApp');
     if (host && host.parentNode) {
       host.parentNode.insertBefore(root, host);
-      host.style.setProperty('display', 'none', 'important');
       return;
     }
-    // the Vue app may mount late — keep looking
     let tries = 0;
     const t = setInterval(() => {
       const el = document.getElementById('movieApp');
       if (el && el.parentNode) {
         clearInterval(t);
         el.parentNode.insertBefore(root, el);
-        el.style.setProperty('display', 'none', 'important');
       } else if (++tries > 40) {
         clearInterval(t);
         document.body.appendChild(root);

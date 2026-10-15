@@ -16,11 +16,12 @@ Japan Foundation's terms and to copyright law.
 
 ## Features
 
-- **Explore page** — on the catalogue page (`/movie/`) the site's plain listing is replaced with a
-  Netflix-style browse view built from the site's own public catalogue JSON: rows for *Continue
-  watching*, *Available now*, *Ending soon*, *With Indonesian subtitles*, *Free on YouTube* and
-  *Coming soon*, plus search (English or 日本語), filter chips, a region selector, poster cards with
-  age rating and days-left badges, and a **Classic view** toggle. See below.
+- **Explore page (opt-in)** — a small **Explore** pill sits bottom-left of the catalogue page. Tap it and
+  the site's listing is replaced with a Netflix-style browse view built from the site's own public
+  catalogue JSON: rows for *Continue watching*, *Available now*, *Ending soon*, *With Indonesian
+  subtitles*, *Free on YouTube* and *Coming soon*, plus search (English or 日本語), filter chips, a
+  region selector, poster cards with age rating and days-left badges, and a **Classic view** button.
+  Nothing is fetched and nothing is hidden until you tap Explore — see below.
 - **Resume** — saves your position every few seconds and after a pause, then jumps back to it when the
   page reloads. A time chip shows where you are; tap it to jump to the last watched point.
 - **On-screen controls** (touch-friendly): −15s, play/pause, +15s, picture-in-picture, fullscreen,
@@ -34,6 +35,12 @@ Japan Foundation's terms and to copyright law.
 ## Explore page
 
 ![Explore page](preview-explore-desktop.png)
+
+**Off by default, and it can never blank the catalogue page.** The site's own listing stays exactly as
+it is; a small *Explore* pill (bottom-left, dismissible per page view) opens the browse view, and only
+once its data has actually arrived does it take over the listing. If the catalogue fails or stalls, the
+pill returns, the site's listing is still on screen, and a short message says why — the request is
+aborted after 25 s rather than hanging forever.
 
 The catalogue endpoint (`/jff-api/contents`, ~7 MB of JSON for 274 titles) is fetched once, trimmed to
 the fields the UI needs and cached in `localStorage` for six hours (~3 KB), so browsing costs one
@@ -50,7 +57,11 @@ half-watched film shows its progress bar and `42:10 / 1:59:00` right in the row.
 
 Nothing is scraped beyond that one public endpoint, and no media is fetched: every card links to the
 site's normal film page, so login and DRM playback are untouched. *Classic view* restores the original
-listing at any time, and a failed fetch reports the error while keeping the last cached rows visible.
+listing at any time (and remembers that choice), and a failed fetch reports the error while the site's
+own rows stay visible.
+
+If the browse view ever misbehaves, clearing two keys puts everything back:
+`localStorage.removeItem('jff:explore:active')` and `localStorage.removeItem('jff:explore:index:v2')`.
 
 ## Install
 
