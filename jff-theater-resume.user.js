@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         JFF Theater — Resume + Playback Controls
+// @name         JFF Theater — Explore, Resume + Playback Controls
 // @namespace    https://github.com/diasbaskara
-// @version      1.1.0
-// @description  Remembers where you were on JFF Theater and jumps back there. On-screen touch controls add seeking, fullscreen, picture-in-picture and screen-wake to the site's player. Streaming only — no download, no DRM circumvention.
+// @version      1.2.0
+// @description  Netflix-style browse page for the JFF Theater catalogue (Continue watching, Available now, Ending soon, search), plus resume and touch playback controls on the film pages. Reads the site's own public catalogue API; collects nothing, downloads no media, circumvents no DRM.
 // @author       Hermes Agent (for Dias)
 // @license      MIT
 // @icon         data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23111' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8'/%3E%3Cpath d='M3 3v5h5'/%3E%3C/svg%3E
@@ -402,5 +402,509 @@
     else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); togglePip(); }
   }, true);
 
-  log('ready — ' + (hasGM ? 'GM storage' : 'localStorage'));
+  // ============================================================== Explore page
+  // Replaces the site's /movie/ catalogue listing with a Netflix-style browse view, built from the
+  // site's own public catalogue endpoint (/jff-api/contents). Availability mirrors the site's own
+  // rule: a YouTube-backed item is always available; otherwise the viewer's country must appear in
+  // the item's whiteLists and "now" must fall inside streamStart..streamEnd. Nothing is collected,
+  // no media is fetched — this only re-presents public catalogue metadata the site already serves.
+
+  const isListingPage = /^\/movie\/?$/.test(location.pathname);
+  const CATALOGUE_API = '/jff-api/contents';
+  const CACHE_KEY = 'jff:explore:index:v2';
+  const COUNTRY_KEY = 'jff:explore:country';
+  const CLASSIC_KEY = 'jff:explore:classic';
+  const CACHE_TTL = 6 * 60 * 60 * 1000;
+  const DAY = 86400000;
+
+  const EX_ICON = {
+    search: stroked('<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>'),
+    refresh: stroked('<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>' +
+                     '<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>'),
+    clock: stroked('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>')
+  };
+
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  const norm = (p) => String(p || '').replace(/\/+$/, '');
+  const DAYS = (ms) => Math.max(0, Math.ceil(ms / DAY));
+  const relDay = (ms) => (ms < 0 ? 'ended' : ms < DAY ? 'today' : DAYS(ms) + 'd');
+
+  // ---------------------------------------------------------------- data
+  const TZ_COUNTRY = {
+    'Asia/Jakarta': 'id', 'Asia/Pontianak': 'id', 'Asia/Makassar': 'id', 'Asia/Jayapura': 'id',
+    'Asia/Tokyo': 'jp', 'Asia/Bangkok': 'th', 'Asia/Manila': 'ph', 'Asia/Kuala_Lumpur': 'my',
+    'Asia/Singapore': 'sg', 'Asia/Ho_Chi_Minh': 'vn', 'Asia/Yangon': 'mm', 'Asia/Phnom_Penh': 'kh',
+    'Asia/Vientiane': 'la', 'Asia/Kolkata': 'in', 'Australia/Sydney': 'au', 'Pacific/Auckland': 'nz'
+  };
+
+  function guessCountry() {
+    try {
+      const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || '';
+      if (TZ_COUNTRY[tz]) return TZ_COUNTRY[tz];
+    } catch (e) {}
+    try {
+      const region = (navigator.language || '').split('-')[1];
+      if (region) return region.toLowerCase();
+    } catch (e) {}
+    return '';
+  }
+
+  function storedCountry() { try { const v = localStorage.getItem(COUNTRY_KEY); return v === null ? null : v; } catch (e) { return null; } }
+
+  function trimEntry(e) {
+    const jp = e.contentsTitle || '';
+    let en = e.contentsTitleEn || '';
+    if (!en || en.toLowerCase() === 'title') en = '';
+    const caps = [];
+    for (let i = 1; i <= 20; i++) { const v = e['captionLange' + i]; if (v) caps.push(String(v).toLowerCase()); }
+    const wl = e.whiteLists || [];
+    const flagged = wl.find((w) => w.ratingFlag && w.message);
+    return {
+      code: e.contentsCode, path: norm(e.detailUrl), link: e.detailUrl || (norm(e.detailUrl) + '/'),
+      title: en || jp, jp: en ? jp : '',
+      img: e.poster || e.thumbnail || '', start: e.streamStart || '', end: e.streamEnd || '',
+      yt: e.youtubeLink || '', caps, countries: wl.map((w) => String(w.country).toLowerCase()),
+      rating: flagged ? String(flagged.message) : ''
+    };
+  }
+
+  // The site only knows the viewer's country once they are signed in, so mirror that first and
+  // fall back to a timezone/locale guess for signed-out browsing.
+  async function sessionCountry() {
+    try {
+      const r = await fetch('/jff-api/auth/me', { credentials: 'include', headers: { Accept: 'application/json' } });
+      if (!r.ok) return '';
+      const j = await r.json();
+      const d = (j && j.data) || j || {};
+      const c = d.currentCountry || d.country || d.currentCountryCode || '';
+      return c ? String(c).toLowerCase() : '';
+    } catch (e) { return ''; }
+  }
+
+  function readCache() {
+    try {
+      const raw = localStorage.getItem(CACHE_KEY);
+      if (!raw) return null;
+      const v = JSON.parse(raw);
+      return v && Array.isArray(v.items) ? v : null;
+    } catch (e) { return null; }
+  }
+
+  function writeCache(items) {
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), items }));
+      return true;
+    } catch (e) { log('cache write failed', e); return false; }
+  }
+
+  async function fetchCatalogue(force) {
+    const cached = readCache();
+    if (!force && cached && Date.now() - cached.at < CACHE_TTL) {
+      log('catalogue from cache', cached.items.length);
+      return { items: cached.items, at: cached.at, cached: true };
+    }
+    const r = await fetch(CATALOGUE_API, { credentials: 'include', headers: { Accept: 'application/json' } });
+    if (!r.ok) throw new Error('catalogue HTTP ' + r.status);
+    const j = await r.json();
+    const rows = Array.isArray(j) ? j : (j.data || []);
+    const items = rows.map(trimEntry).filter((x) => x.title && x.path);
+    writeCache(items);
+    log('catalogue fetched', items.length);
+    return { items, at: Date.now(), cached: false };
+  }
+
+  function viewable(it, country, now) {
+    if (it.yt) return true;
+    if (!country) return true;                             // "all regions" mode
+    if (it.countries.length && !it.countries.includes(country)) return false;
+    if (!it.start || !it.end) return false;
+    return !(now < Date.parse(it.start) || now > Date.parse(it.end));
+  }
+
+  async function viewingHistory() {
+    const all = await loadAll();
+    const out = {};
+    for (const [k, v] of Object.entries(all || {})) {
+      const p = norm(k);
+      if (p.startsWith('/movie/') && v && typeof v.t === 'number' && v.t > MIN_SAVE) out[p] = v;
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------- styling
+  function injectExploreStyle() {
+    if (document.getElementById('jff-x-style')) return;
+    const st = document.createElement('style');
+    st.id = 'jff-x-style';
+    st.textContent = `
+#jff-x-root {
+  box-sizing: border-box !important; max-width: 1400px !important; margin: 18px auto !important;
+  padding: 18px 16px 26px !important; border-radius: 16px !important;
+  background: #0b0b0f !important; color: #f5f5f5 !important;
+  font: 400 15px/1.45 -apple-system, "Segoe UI", Roboto, "Noto Sans JP", system-ui, sans-serif !important;
+  box-shadow: 0 10px 34px rgba(0,0,0,.28) !important;
+}
+#jff-x-root * { box-sizing: border-box !important; }
+#jff-x-root .jff-x-head { display: flex !important; flex-wrap: wrap !important; align-items: center !important; gap: 10px 14px !important; margin: 0 0 14px !important; }
+#jff-x-root .jff-x-h1 { font: 700 20px/1.1 inherit !important; margin: 0 !important; color: #fff !important; letter-spacing: -.2px !important; }
+#jff-x-root .jff-x-h1 small { display: block !important; font: 400 12px/1.4 inherit !important; color: #a9a9b4 !important; letter-spacing: 0 !important; }
+#jff-x-root .jff-x-tools { display: flex !important; flex-wrap: wrap !important; align-items: center !important; gap: 8px !important; margin-left: auto !important; }
+#jff-x-root .jff-x-field {
+  -webkit-appearance: none !important; appearance: none !important;
+  display: flex !important; align-items: center !important; gap: 7px !important;
+  padding: 0 11px !important; height: 38px !important; border-radius: 999px !important;
+  background: #1b1b22 !important; border: 1px solid #2c2c37 !important; color: #fff !important;
+  font: 500 14px/1 inherit !important; letter-spacing: 0 !important;
+}
+#jff-x-root .jff-x-field svg { width: 17px !important; height: 17px !important; min-width: 17px !important; max-width: 17px !important;
+  min-height: 17px !important; max-height: 17px !important; display: block !important; fill: none !important;
+  stroke: #9d9dab !important; stroke-width: 2 !important; stroke-linecap: round !important; stroke-linejoin: round !important; }
+#jff-x-root input.jff-x-field { width: min(280px, 62vw) !important; min-width: 150px !important; }
+#jff-x-root input.jff-x-field::placeholder { color: #7c7c8a !important; }
+#jff-x-root select.jff-x-field { padding-right: 11px !important; cursor: pointer !important; max-width: 46vw !important; }
+#jff-x-root button.jff-x-field { cursor: pointer !important; }
+#jff-x-root button.jff-x-field:active { transform: scale(.97) !important; }
+#jff-x-root .jff-x-chips { display: flex !important; flex-wrap: wrap !important; gap: 8px !important; margin: 0 0 16px !important; }
+#jff-x-root .jff-x-chip {
+  -webkit-appearance: none !important; appearance: none !important; cursor: pointer !important;
+  height: 32px !important; padding: 0 13px !important; border-radius: 999px !important;
+  background: #17171d !important; border: 1px solid #2c2c37 !important; color: #d7d7e0 !important;
+  font: 600 13px/1 inherit !important; letter-spacing: 0 !important; white-space: nowrap !important;
+}
+#jff-x-root .jff-x-chip[aria-pressed="true"] { background: #fff !important; border-color: #fff !important; color: #111 !important; }
+#jff-x-root .jff-x-row { margin: 0 0 22px !important; }
+#jff-x-root .jff-x-rowhead { display: flex !important; align-items: baseline !important; gap: 10px !important; margin: 0 0 9px !important; }
+#jff-x-root .jff-x-rowhead h2 { font: 700 16px/1.2 inherit !important; margin: 0 !important; color: #fff !important; }
+#jff-x-root .jff-x-rowhead span { font: 400 12px/1.2 inherit !important; color: #8f8f9c !important; }
+#jff-x-root .jff-x-strip {
+  display: flex !important; gap: 12px !important; overflow-x: auto !important; overflow-y: hidden !important;
+  padding: 2px 2px 10px !important; scroll-snap-type: x proximity !important;
+  -webkit-overflow-scrolling: touch !important; scrollbar-width: thin !important;
+}
+#jff-x-root .jff-x-strip::-webkit-scrollbar { height: 6px !important; }
+#jff-x-root .jff-x-strip::-webkit-scrollbar-thumb { background: #35353f !important; border-radius: 3px !important; }
+#jff-x-root .jff-x-grid { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)) !important; gap: 14px !important; }
+#jff-x-root .jff-x-card { display: block !important; text-decoration: none !important; color: inherit !important;
+  width: 136px !important; flex: 0 0 136px !important; scroll-snap-align: start !important; }
+#jff-x-root .jff-x-grid .jff-x-card { width: auto !important; flex: none !important; }
+#jff-x-root .jff-x-card:active .jff-x-poster { transform: scale(.975) !important; }
+#jff-x-root .jff-x-poster { position: relative !important; border-radius: 10px !important; overflow: hidden !important;
+  background: #191921 !important; aspect-ratio: 2 / 3 !important; transition: transform .16s ease !important; }
+#jff-x-root .jff-x-poster img { display: block !important; width: 100% !important; height: 100% !important; object-fit: cover !important; }
+#jff-x-root .jff-x-fallback { position: absolute !important; inset: 0 !important; display: flex !important; align-items: center !important;
+  justify-content: center !important; text-align: center !important; padding: 10px !important; color: #6f6f7d !important;
+  font: 600 12px/1.35 inherit !important; }
+#jff-x-root .jff-x-badges { position: absolute !important; left: 6px !important; bottom: 6px !important; display: flex !important; gap: 4px !important; flex-wrap: wrap !important; }
+#jff-x-root .jff-x-badge { background: rgba(0,0,0,.72) !important; color: #fff !important; border-radius: 5px !important;
+  padding: 3px 6px !important; font: 700 10px/1 inherit !important; letter-spacing: .2px !important;
+  -webkit-backdrop-filter: blur(4px) !important; backdrop-filter: blur(4px) !important; }
+#jff-x-root .jff-x-badge.jff-x-warn { background: rgba(214,60,60,.9) !important; }
+#jff-x-root .jff-x-progress { position: absolute !important; left: 0 !important; right: 0 !important; bottom: 0 !important; height: 4px !important; background: rgba(255,255,255,.22) !important; }
+#jff-x-root .jff-x-progress i { display: block !important; height: 100% !important; background: #e50914 !important; }
+#jff-x-root .jff-x-ct { margin: 7px 0 0 !important; font: 600 13px/1.3 inherit !important; color: #f2f2f6 !important;
+  display: -webkit-box !important; -webkit-line-clamp: 2 !important; -webkit-box-orient: vertical !important; overflow: hidden !important; }
+#jff-x-root .jff-x-cs { margin: 2px 0 0 !important; font: 400 11.5px/1.3 inherit !important; color: #8d8d9b !important;
+  white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+#jff-x-root .jff-x-meta { margin: 3px 0 0 !important; font: 500 11px/1.3 inherit !important; color: #6f6f7d !important; }
+#jff-x-root .jff-x-note { color: #9a9aa8 !important; font: 400 13px/1.5 inherit !important; margin: 4px 0 14px !important; }
+#jff-x-root .jff-x-empty { padding: 26px 4px !important; color: #9a9aa8 !important; }
+#jff-x-root .jff-x-status { margin-top: 6px !important; color: #77778a !important; font: 400 12px/1.5 inherit !important; }
+#jff-x-root .jff-x-status b { color: #b9b9c6 !important; font-weight: 600 !important; }
+@media (max-width: 560px) {
+  #jff-x-root { border-radius: 0 !important; margin: 0 !important; padding: 14px 12px 22px !important; }
+  #jff-x-root .jff-x-card { width: 118px !important; flex: 0 0 118px !important; }
+  #jff-x-root .jff-x-grid { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)) !important; gap: 11px !important; }
+  #jff-x-root .jff-x-h1 { font-size: 17px !important; }
+}
+`;
+    (document.head || document.documentElement).appendChild(st);
+  }
+
+  // ---------------------------------------------------------------- markup
+  function cardHTML(it, country, now, hist) {
+    const histPos = hist && it.path ? hist[it.path] : null;
+    const badges = [];
+    if (it.rating) badges.push('<span class="jff-x-badge">' + esc(it.rating) + '</span>');
+    if (it.caps.includes('id')) badges.push('<span class="jff-x-badge">ID subs</span>');
+    if (it.yt) badges.push('<span class="jff-x-badge">YouTube</span>');
+    if (!it.yt) {
+      const started = it.start ? Date.parse(it.start) : null;
+      const ended = it.end ? Date.parse(it.end) : null;
+      if (ended !== null && now > ended) {
+        badges.push('<span class="jff-x-badge jff-x-warn">ended</span>');
+      } else if (started !== null && now < started) {
+        badges.push('<span class="jff-x-badge">from ' + esc(it.start.slice(0, 10)) + '</span>');
+      } else if (ended !== null && ended - now <= 21 * DAY) {
+        badges.push('<span class="jff-x-badge jff-x-warn">' + relDay(ended - now) + ' left</span>');
+      }
+    }
+    if (country && !it.yt && it.countries.length && !it.countries.includes(country)) {
+      badges.push('<span class="jff-x-badge jff-x-warn">other region</span>');
+    }
+    const poster = it.img
+      ? '<img src="' + esc(it.img) + '" alt="" loading="lazy" decoding="async">'
+      : '<div class="jff-x-fallback">' + esc(it.title) + '</div>';
+    let bar = '';
+    if (histPos && histPos.d) {
+      const pct = Math.max(2, Math.min(100, Math.round((histPos.t / histPos.d) * 100)));
+      bar = '<div class="jff-x-progress"><i style="width:' + pct + '%"></i></div>';
+    }
+    const meta = histPos
+      ? '<div class="jff-x-meta">' + esc(fmt(histPos.t)) + ' / ' + esc(fmt(histPos.d)) + '</div>'
+      : '';
+    const href = it.link || it.path || '#';
+    return '<a class="jff-x-card" href="' + esc(href) + '" title="' + esc((it.title || '') + (it.jp ? ' — ' + it.jp : '')) + '">' +
+      '<div class="jff-x-poster">' + poster +
+        (badges.length ? '<div class="jff-x-badges">' + badges.join('') + '</div>' : '') + bar +
+      '</div>' +
+      '<div class="jff-x-ct">' + esc(it.title) + '</div>' +
+      (it.jp ? '<div class="jff-x-cs">' + esc(it.jp) + '</div>' : '') + meta +
+    '</a>';
+  }
+
+  function rowHTML(title, items, country, now, hist, count) {
+    if (!items.length) return '';
+    return '<section class="jff-x-row">' +
+      '<div class="jff-x-rowhead"><h2>' + esc(title) + '</h2><span>' + (count || items.length) + ' films</span></div>' +
+      '<div class="jff-x-strip">' + items.map((it) => cardHTML(it, country, now, hist)).join('') + '</div>' +
+    '</section>';
+  }
+
+  // ---------------------------------------------------------------- app
+  async function initExplore() {
+    if (!isListingPage) return;
+    if (document.getElementById('jff-x-root')) return;
+
+    const state = { items: [], at: 0, country: storedCountry(), q: '', filter: 'all', hist: {}, loading: true, error: '' };
+
+    const root = document.createElement('div');
+    root.id = 'jff-x-root';
+    root.innerHTML =
+      '<div class="jff-x-head">' +
+        '<h1 class="jff-x-h1">Explore JFF Theater<small>Free Japanese films — resume where you left off</small></h1>' +
+        '<div class="jff-x-tools">' +
+          '<label class="jff-x-field">' + EX_ICON.search +
+            '<input class="jff-x-field" id="jff-x-q" type="search" placeholder="Search films (English or 日本語)" autocomplete="off"></label>' +
+          '<select class="jff-x-field" id="jff-x-country" title="Availability country"></select>' +
+          '<button class="jff-x-field" id="jff-x-refresh" type="button" title="Refresh catalogue">' + EX_ICON.refresh + '</button>' +
+          '<button class="jff-x-field" id="jff-x-classic" type="button">Classic view</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="jff-x-chips" id="jff-x-chips"></div>' +
+      '<div id="jff-x-body"><div class="jff-x-empty">Loading the catalogue…</div></div>' +
+      '<div class="jff-x-status" id="jff-x-status"></div>';
+
+    injectExploreStyle();
+    mountExplore(root);
+    if (localStorage.getItem(CLASSIC_KEY) === '1') { setClassic(true); return; }
+
+    const body = root.querySelector('#jff-x-body');
+    const statusEl = root.querySelector('#jff-x-status');
+    const qEl = root.querySelector('#jff-x-q');
+    const countryEl = root.querySelector('#jff-x-country');
+    const chipsEl = root.querySelector('#jff-x-chips');
+
+    const FILTERS = [
+      ['all', 'All'],
+      ['now', 'Available now'],
+      ['soon', 'Ending soon'],
+      ['id', 'Indonesian subtitles'],
+      ['yt', 'Free on YouTube'],
+      ['upcoming', 'Coming soon'],
+      ['progress', 'Started watching']
+    ];
+
+    function paintChips() {
+      chipsEl.innerHTML = FILTERS.map(([k, label]) => {
+        const n = k === 'all' ? state.items.length : countFor(k);
+        return '<button class="jff-x-chip" type="button" data-filter="' + k + '" aria-pressed="' +
+          (state.filter === k) + '">' + esc(label) + (n ? ' · ' + n : '') + '</button>';
+      }).join('');
+    }
+
+    function paintCountry() {
+      const codes = new Set();
+      for (const it of state.items) for (const c of it.countries) codes.add(c);
+      const list = [...codes].sort();
+      const cur = state.country || '';
+      countryEl.innerHTML = '<option value="">All regions</option>' +
+        list.map((c) => '<option value="' + c + '"' + (c === cur ? ' selected' : '') + '>' + c.toUpperCase() + '</option>').join('');
+    }
+
+    function viewableItems() {
+      const now = Date.now();
+      return state.items.filter((it) => viewable(it, state.country, now));
+    }
+
+    function countFor(kind) {
+      const now = Date.now();
+      const live = viewableItems();
+      switch (kind) {
+        case 'now': return live.filter((it) => it.yt || (it.start && it.end && now >= Date.parse(it.start) && now <= Date.parse(it.end))).length;
+        case 'soon': return live.filter((it) => it.end && Date.parse(it.end) - now <= 21 * DAY && Date.parse(it.end) >= now).length;
+        case 'id': return live.filter((it) => it.caps.includes('id')).length;
+        case 'yt': return state.items.filter((it) => it.yt).length;
+        case 'upcoming': return state.items.filter((it) => it.start && now < Date.parse(it.start)).length;
+        case 'progress': return Object.keys(state.hist).length;
+        default: return state.items.length;
+      }
+    }
+
+    function applyFilter(list, kind) {
+      const now = Date.now();
+      switch (kind) {
+        case 'now': return list.filter((it) => it.yt || (it.start && it.end && now >= Date.parse(it.start) && now <= Date.parse(it.end)));
+        case 'soon': return list.filter((it) => it.end && Date.parse(it.end) >= now && Date.parse(it.end) - now <= 21 * DAY)
+          .sort((a, b) => Date.parse(a.end) - Date.parse(b.end));
+        case 'id': return list.filter((it) => it.caps.includes('id'));
+        case 'yt': return list.filter((it) => it.yt);
+        case 'upcoming': return list.filter((it) => it.start && now < Date.parse(it.start))
+          .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+        case 'progress': {
+          const order = Object.entries(state.hist).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).map(([p]) => p);
+          return order.map((p) => list.find((it) => it.path === p)).filter(Boolean);
+        }
+        default: return list;
+      }
+    }
+
+    function search(list) {
+      const q = state.q.trim().toLowerCase();
+      if (!q) return list;
+      return list.filter((it) => (it.title + ' ' + it.jp + ' ' + it.path).toLowerCase().includes(q));
+    }
+
+    function render() {
+      const now = Date.now();
+      const live = viewableItems();
+      // A search looks across the whole catalogue (so you can still find a film that has ended or
+      // is region-locked elsewhere); a chip filter narrows the watchable set.
+      const flat = search(applyFilter(state.q.trim() ? state.items : (state.filter === 'all' ? live : viewableItems()), state.filter));
+
+      paintChips();
+
+      if (state.q.trim() || state.filter !== 'all') {
+        body.innerHTML = flat.length
+          ? '<section class="jff-x-row"><div class="jff-x-rowhead"><h2>' +
+            (state.q.trim() ? 'Results' : (FILTERS.find((f) => f[0] === state.filter) || [, 'Results'])[1]) +
+            '</h2><span>' + flat.length + ' films</span></div><div class="jff-x-grid">' +
+            flat.map((it) => cardHTML(it, state.country, now, state.hist)).join('') + '</div></section>'
+          : '<div class="jff-x-empty">Nothing matches. Try another title, or set the region filter to “All regions”.</div>';
+      } else {
+        const started = applyFilter(live, 'progress');
+        const nowRow = live.filter((it) => it.yt || (it.start && it.end && now >= Date.parse(it.start) && now <= Date.parse(it.end)))
+          .sort((a, b) => Date.parse(b.start || 0) - Date.parse(a.start || 0)).slice(0, 30);
+        const soonRow = live.filter((it) => it.end && Date.parse(it.end) >= now && Date.parse(it.end) - now <= 21 * DAY)
+          .sort((a, b) => Date.parse(a.end) - Date.parse(b.end));
+        const idRow = live.filter((it) => it.caps.includes('id')).slice(0, 30);
+        const ytRow = state.items.filter((it) => it.yt).slice(0, 30);
+        const upRow = state.items.filter((it) => it.start && now < Date.parse(it.start))
+          .sort((a, b) => Date.parse(a.start) - Date.parse(b.start)).slice(0, 30);
+
+        body.innerHTML =
+          (state.loading ? '<div class="jff-x-empty">Loading…</div>' : '') +
+          rowHTML('Continue watching', started.slice(0, 24), state.country, now, state.hist) +
+          rowHTML('Available now', nowRow, state.country, now, state.hist, countFor('now')) +
+          rowHTML('Ending soon', soonRow, state.country, now, state.hist, countFor('soon')) +
+          rowHTML('With Indonesian subtitles', idRow, state.country, now, state.hist, countFor('id')) +
+          rowHTML('Free on YouTube', ytRow, state.country, now, state.hist, countFor('yt')) +
+          rowHTML('Coming soon', upRow, state.country, now, state.hist, countFor('upcoming')) +
+          (live.length ? '' : '<div class="jff-x-empty">No film is available for the selected region right now. Switch the region filter to “All regions” to browse everything.</div>');
+      }
+
+      const age = state.at ? Math.round((Date.now() - state.at) / 60000) : null;
+      statusEl.innerHTML = state.error
+        ? 'Catalogue could not be loaded: ' + esc(state.error) + ' — retry with the refresh button.'
+        : '<b>' + state.items.length + '</b> titles in the catalogue · <b>' + countFor('now') + '</b> available now' +
+          (state.country ? ' for region <b>' + esc(state.country.toUpperCase()) + '</b>' : ' (all regions shown)') +
+          (age === null ? '' : ' · updated ' + (age < 1 ? 'just now' : age + ' min ago')) +
+          ' · positions stored locally by this script: <b>' + Object.keys(state.hist).length + '</b>';
+    }
+
+    function setClassic(on) {
+      try { localStorage.setItem(CLASSIC_KEY, on ? '1' : '0'); } catch (e) {}
+      root.style.setProperty('display', on ? 'none' : 'block', 'important');
+      const app = document.getElementById('movieApp');
+      if (app) app.style.setProperty('display', on ? '' : 'none', 'important');
+      const btn = root.querySelector('#jff-x-classic');
+      if (btn) btn.textContent = on ? 'Explore view' : 'Classic view';
+      if (btn) btn.onclick = () => setClassic(!on);
+    }
+
+    root.addEventListener('click', (e) => {
+      const chip = e.target.closest && e.target.closest('.jff-x-chip');
+      if (!chip) return;
+      state.filter = chip.getAttribute('data-filter') || 'all';
+      render();
+    });
+    qEl.addEventListener('input', () => { state.q = qEl.value; render(); });
+    countryEl.addEventListener('change', () => {
+      state.country = countryEl.value;
+      try { localStorage.setItem(COUNTRY_KEY, state.country); } catch (e) {}
+      render();
+    });
+    root.querySelector('#jff-x-refresh').addEventListener('click', async () => {
+      state.error = '';
+      body.innerHTML = '<div class="jff-x-empty">Refreshing the catalogue…</div>';
+      try {
+        const res = await fetchCatalogue(true);
+        state.items = res.items; state.at = res.at;
+        paintCountry(); render();
+      } catch (err) {
+        state.error = err.message || String(err);
+        render();
+      }
+    });
+
+    // load
+    (async () => {
+      state.hist = await viewingHistory();
+      const cached = readCache();
+      if (cached) { state.items = cached.items; state.at = cached.at; state.loading = false; paintCountry(); render(); }
+      if (state.country === null) {
+        const detected = (await sessionCountry()) || guessCountry();
+        state.country = detected || '';
+        if (detected) { try { localStorage.setItem(COUNTRY_KEY, detected); } catch (e) {} }
+      }
+      try {
+        const res = await fetchCatalogue(false);
+        state.items = res.items; state.at = res.at; state.loading = false;
+        paintCountry(); render();
+      } catch (err) {
+        state.loading = false;
+        state.error = err.message || String(err);
+        render();
+      }
+    })();
+
+    setClassic(false);
+  }
+
+  function mountExplore(root) {
+    const host = document.getElementById('movieApp');
+    if (host && host.parentNode) {
+      host.parentNode.insertBefore(root, host);
+      host.style.setProperty('display', 'none', 'important');
+      return;
+    }
+    // the Vue app may mount late — keep looking
+    let tries = 0;
+    const t = setInterval(() => {
+      const el = document.getElementById('movieApp');
+      if (el && el.parentNode) {
+        clearInterval(t);
+        el.parentNode.insertBefore(root, el);
+        el.style.setProperty('display', 'none', 'important');
+      } else if (++tries > 40) {
+        clearInterval(t);
+        document.body.appendChild(root);
+      }
+    }, 250);
+  }
+
+  if (isListingPage) initExplore().catch((e) => log('explore failed', e));
+
+  log('ready — ' + (hasGM ? 'GM storage' : 'localStorage') + (isListingPage ? ' · explore page' : ' · player'));
 })();
