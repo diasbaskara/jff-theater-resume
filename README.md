@@ -38,7 +38,7 @@ Japan Foundation's terms and to copyright law.
 2. Settings → Safari → Extensions → enable **Userscripts**, allow for **All Websites**.
 3. Save `jff-theater-resume.user.js` into the Userscripts folder (Files app), or open a `.user.js` URL in
    Safari and install from the extension popup.
-4. Open a film on JFF Theater and press play — the control bar appears bottom-left.
+4. Open a film on JFF Theater and press play — the control bar appears centred at the bottom.
 
 **Desktop — Tampermonkey / Violentmonkey / Safari**
 
