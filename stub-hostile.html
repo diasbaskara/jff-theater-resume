@@ -1,0 +1,81 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>iOS harness — with JFF's own hostile CSS</title>
+<style>
+  /* ---- the exact rules from the JFF site stylesheet that distorted the icons ---- */
+  :where(img,svg,video,canvas,audio,iframe,embed,object){display:block}
+  :where(svg){stroke:none;fill:currentColor}
+  :where(svg):where(:not([width])){inline-size:5rem}
+  button{background:0 0}
+  svg{width:100%;height:100%}
+  /* ---- page styling ---- */
+  body{font:15px system-ui;background:#111;color:#eee;padding:0 0 140px}
+</style>
+</head><body>
+<h3>iOS/Safari harness — hostile host CSS + stubbed media + Safari APIs</h3>
+<div id="host"></div>
+<script>
+  window.GM = {
+    setValue: (k, v) => { localStorage.setItem('gm:' + k, JSON.stringify(v)); return Promise.resolve(); },
+    getValue: (k, d) => {
+      const raw = localStorage.getItem('gm:' + k);
+      return Promise.resolve(raw === null ? d : JSON.parse(raw));
+    }
+  };
+  window.safariCalls = [];
+  window.makeStubVideo = function (startAt, safari) {
+    const v = document.createElement('video');
+    let t = startAt || 0;
+    Object.defineProperty(v, 'duration', { get: () => 300, configurable: true });
+    Object.defineProperty(v, 'currentTime', {
+      get: () => t, set: (x) => { t = x; v.dispatchEvent(new Event('seeked')); }, configurable: true
+    });
+    Object.defineProperty(v, 'paused', { get: () => !window.__playing, configurable: true });
+    v.play = () => { window.__playing = true; return Promise.resolve(); };
+    v.pause = () => { window.__playing = false; };
+    if (safari) {
+      v.webkitEnterFullscreen = () => { window.safariCalls.push('fullscreen'); };
+      v.webkitSetPresentationMode = (m) => { window.safariCalls.push('pip:' + m); };
+      v.webkitPresentationMode = 'inline';
+    }
+    document.getElementById('host').appendChild(v);
+    setTimeout(() => { v.dispatchEvent(new Event('loadedmetadata')); v.dispatchEvent(new Event('canplay')); }, 250);
+    return v;
+  };
+
+  /* Rasterise an icon the way the browser actually paints it: bake the COMPUTED styles
+     into a clone, draw it to a canvas, and report ink pixels + bounding box. */
+  window.measureIcon = async function (label) {
+    const btnEl = [...document.querySelectorAll('#jff-bar button')]
+      .find(b => (b.getAttribute('aria-label') || '') === label);
+    if (!btnEl) return { error: 'no button ' + label };
+    const svgEl = btnEl.querySelector('svg');
+    const cs = getComputedStyle(svgEl);
+    const rect = svgEl.getBoundingClientRect();
+    const clone = svgEl.cloneNode(true);
+    clone.setAttribute('fill', cs.fill);
+    clone.setAttribute('stroke', cs.stroke);
+    clone.setAttribute('stroke-width', cs.strokeWidth);
+    clone.setAttribute('width', '48');
+    clone.setAttribute('height', '48');
+    const src = new XMLSerializer().serializeToString(clone);
+    const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(src);
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('raster fail')); img.src = url; });
+    const c = document.createElement('canvas'); c.width = 48; c.height = 48;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, 48, 48);
+    const d = ctx.getImageData(0, 0, 48, 48).data;
+    let minX = 48, minY = 48, maxX = -1, maxY = -1, ink = 0;
+    const bits = new Uint8Array(48 * 48);
+    for (let y = 0; y < 48; y++) for (let x = 0; x < 48; x++) {
+      const a = d[(y * 48 + x) * 4 + 3];
+      if (a > 24) { ink++; bits[y * 48 + x] = 1; if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+    }
+    return {
+      cssStroke: cs.stroke, cssFill: cs.fill, cssW: cs.width, cssH: cs.height,
+      boxW: Math.round(rect.width), boxH: Math.round(rect.height),
+      ink, bbox: [minX, minY, maxX, maxY], bits
+    };
+  };
+</script>
+</body></html>

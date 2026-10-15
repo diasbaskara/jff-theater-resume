@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>resume-script test</title>
+<style>body{font:15px system-ui;background:#111;color:#eee}video{width:480px;background:#000}</style>
+</head><body>
+<h3>Local harness — mimics JFF: the player element is injected by JS after load</h3>
+<video id="v" controls muted playsinline></video>
+<p id="state">loading…</p>
+<script>
+  // the real site creates its player element asynchronously; mimic that
+  setTimeout(() => {
+    const v = document.getElementById('v');
+    v.src = 'REPLACE-WITH-A-LOCAL-MEDIA-FILE.mp4';
+    const upd = () => document.getElementById('state').textContent =
+      'duration=' + (isFinite(v.duration) ? v.duration.toFixed(1) : 'NaN') + '  currentTime=' + v.currentTime.toFixed(1);
+    v.addEventListener('loadedmetadata', upd);
+    v.addEventListener('timeupdate', upd);
+    v.addEventListener('seeked', upd);
+  }, 800);
+</script>
+</body></html>

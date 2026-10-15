@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>iOS resume-script harness</title>
+<style>body{font:15px system-ui;background:#111;color:#eee;padding:0 0 120px}</style>
+</head><body>
+<h3>iOS/Safari harness — stubbed media element + Safari-only APIs</h3>
+<div id="host"></div>
+<script>
+  // ---- GM stub (mimics the iOS "Userscripts" app), persisted so it survives a reload
+  window.GM = {
+    setValue: (k, v) => { localStorage.setItem('gm:' + k, JSON.stringify(v)); return Promise.resolve(); },
+    getValue: (k, d) => {
+      const raw = localStorage.getItem('gm:' + k);
+      return Promise.resolve(raw === null ? d : JSON.parse(raw));
+    }
+  };
+
+  window.safariCalls = [];
+  window.makeStubVideo = function (startAt, safari) {
+    const v = document.createElement('video');
+    let t = startAt || 0;
+    Object.defineProperty(v, 'duration', { get: () => 300, configurable: true });
+    Object.defineProperty(v, 'currentTime', {
+      get: () => t, set: (x) => { t = x; v.dispatchEvent(new Event('seeked')); }, configurable: true
+    });
+    Object.defineProperty(v, 'paused', { get: () => !window.__playing, configurable: true });
+    v.play = () => { window.__playing = true; return Promise.resolve(); };
+    v.pause = () => { window.__playing = false; };
+    if (safari) {                                  // iPhone/iPad Safari surface
+      v.webkitEnterFullscreen = () => { window.safariCalls.push('fullscreen'); };
+      v.webkitSetPresentationMode = (m) => { window.safariCalls.push('pip:' + m); };
+      v.webkitPresentationMode = 'inline';
+    }
+    document.getElementById('host').appendChild(v);
+    setTimeout(() => { v.dispatchEvent(new Event('loadedmetadata')); v.dispatchEvent(new Event('canplay')); }, 250);
+    return v;
+  };
+</script>
+</body></html>

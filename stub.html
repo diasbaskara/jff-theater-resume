@@ -1,0 +1,29 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>resume-script logic harness</title>
+<style>body{font:15px system-ui;background:#111;color:#eee}</style>
+</head><body>
+<h3>Logic harness — no real media; the media element is stubbed so the resume /
+save / keyboard code paths can be exercised in a real browser.</h3>
+<div id="host"></div>
+<script>
+  // Build a <video> whose duration/currentTime behave like a loaded 300s stream.
+  window.makeStubVideo = function (startAt) {
+    const v = document.createElement('video');
+    let t = startAt || 0, d = 300, ready = false;
+    Object.defineProperty(v, 'duration', { get: () => d, configurable: true });
+    Object.defineProperty(v, 'currentTime', {
+      get: () => t,
+      set: (x) => { t = x; window.lastSeek = x; v.dispatchEvent(new Event('seeked')); },
+      configurable: true
+    });
+    Object.defineProperty(v, 'readyState', { get: () => (ready ? 4 : 0), configurable: true });
+    v.play = () => { ready = true; return Promise.resolve(); };
+    v.pause = () => {};
+    v.muted = true;
+    document.getElementById('host').appendChild(v);
+    // announce that the "stream" is ready, like a real player would
+    setTimeout(() => { window.__ready = true; v.dispatchEvent(new Event('loadedmetadata')); v.dispatchEvent(new Event('canplay')); }, 300);
+    return v;
+  };
+</script>
+</body></html>
