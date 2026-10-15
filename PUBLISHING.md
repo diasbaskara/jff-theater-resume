@@ -49,23 +49,28 @@ Sign in at <https://greasyfork.org> (GitHub, Google or email), then **Post a new
 
 ```markdown
 JFF Theater's own player has no resume feature: reload the page, lose Wi-Fi, or let Safari discard the
-tab, and a 119-minute film starts again at 00:00. This script remembers your position and jumps back
-to it.
+tab, and a 119-minute film starts again at 00:00. And its catalogue page is a flat list with no way to
+see what is about to expire. This script fixes both.
+
+**Explore page** — the catalogue page is rebuilt Netflix-style from the site's own public catalogue
+JSON: _Continue watching_ (with a progress bar, joined from the positions this script stores),
+_Available now_, _Ending soon_, _With Indonesian subtitles_, _Free on YouTube_ and _Coming soon_.
+Search in English or Japanese, filter chips with live counts, a region selector, and age-rating /
+days-left / ended / other-region badges. A **Classic view** toggle puts the original listing back at
+any time. The catalogue is cached for six hours (~3 KB), so browsing costs one request every six hours.
+
+**Resume + playback controls** — remembers your position and jumps back to it, with a touch bar for
+iOS/iPadOS Safari (−15s, play/pause, +15s, picture-in-picture, fullscreen) and keyboard shortcuts on
+desktop. Screen wake lock keeps the display awake while playing.
 
 **It is a streaming convenience, not a downloader.** No video is fetched, copied, saved or decrypted —
-the script stores a timestamp in userscript storage (or `localStorage`) and seeks the player to it.
-Using the films remains subject to the Japan Foundation's terms and to copyright law.
+the script stores a timestamp and re-presents public catalogue metadata, and every card links to the
+site's normal film page, so login and DRM playback are untouched. Using the films remains subject to
+the Japan Foundation's terms and to copyright law.
 
-Features:
-
-- Resume after a reload, with a time chip you can tap to jump to your last position
-- Touch control bar for iOS/iPadOS Safari: −15s, play/pause, +15s, picture-in-picture, fullscreen
-- Keyboard shortcuts on desktop: arrows to seek, plus fullscreen, PiP, mute and restart
-- Screen wake lock while playing, so the display does not dim mid-film
-- Works with the iOS "Userscripts" app, Tampermonkey, Violentmonkey and Safari
-
-Note: the player element is found with `document.querySelectorAll('video')`, so it needs updating if
-JFF changes its player.
+Note: the player element is found with `document.querySelectorAll('video')`, and availability mirrors
+the site's own rule (country whitelist + streaming window), so it needs updating if JFF changes its
+player or catalogue API.
 ```
 
 ## Step 3 — Checklist before posting
