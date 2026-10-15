@@ -10,6 +10,8 @@ seeks back to it.
 
 ![Control bar](preview-controls.png)
 
+![Control bar, desktop](preview-controls-desktop.png)
+
 It is a **streaming convenience**, not a downloader: no media is fetched, copied, saved or decrypted —
 only a time offset is stored. Public performance and redistribution of the films remain subject to the
 Japan Foundation's terms and to copyright law.
@@ -19,7 +21,9 @@ Japan Foundation's terms and to copyright law.
 - **Resume** — saves your position every few seconds and after a pause, then jumps back to it when the
   page reloads. A time chip shows where you are; tap it to jump to the last watched point.
 - **On-screen controls** (touch-friendly): −15s, play/pause, +15s, picture-in-picture, fullscreen,
-  and a hide button that leaves a small badge behind.
+  and a hide button that leaves a small badge behind. The bar is a centred floating pill — same surface
+  as the resume hint — with a hairline divider after the time and a filled play button for the primary
+  action; button sizes use `clamp()` so it still fits a 320 px phone without wrapping.
 - **Keyboard shortcuts** (desktop): `←`/`→` ±10s, `Shift`+arrows ±60s, `Space`, `F`, `P`, `M`, `0`
   (restart), `T` (copy timestamp).
 - **Screen wake lock** while playing, so the display does not dim mid-film.
