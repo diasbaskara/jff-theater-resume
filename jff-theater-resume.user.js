@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JFF Theater — Explore, Resume + Playback Controls
 // @namespace    https://github.com/diasbaskara
-// @version      1.2.1
+// @version      1.3.0
 // @description  Netflix-style browse page for the JFF Theater catalogue (Continue watching, Available now, Ending soon, search), plus resume and touch playback controls on the film pages. Reads the site's own public catalogue API; collects nothing, downloads no media, circumvents no DRM.
 // @author       Hermes Agent (for Dias)
 // @license      MIT
@@ -38,6 +38,14 @@
   const SAVE_EVERY = 5000;
 
   const hasGM = typeof GM !== 'undefined' && GM && typeof GM.setValue === 'function';
+  // Which userscript manager is running us — the iOS app exposes this through GM.info.
+  const gmInfo = (() => {
+    try {
+      const g = (typeof GM !== 'undefined' && GM && GM.info) || (typeof GM_info !== 'undefined' && GM_info);
+      if (!g) return '';
+      return (g.scriptHandler || '?') + ' ' + (g.version || '');
+    } catch (e) { return ''; }
+  })();
   const log = (...a) => console.log('[jff-resume]', ...a);
 
   // ---------------------------------------------------------------- storage
@@ -99,7 +107,8 @@
     full: stroked('<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/>' +
                   '<path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>'),
     hide: stroked('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
-    show: stroked('<path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/>')
+    show: stroked('<path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/>'),
+    clock: stroked('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>')
   };
 
   // ---------------------------------------------------------------- stylesheet
@@ -164,6 +173,25 @@
   font: 600 12px/1 -apple-system, system-ui, sans-serif !important;
   display: flex !important; align-items: center !important; justify-content: center !important;
 }
+#jff-pill {
+  position: fixed !important; left: 8px !important;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px)) !important;
+  z-index: 2147483647 !important; display: flex !important; align-items: center !important; gap: 7px !important;
+  height: 38px !important; padding: 0 13px !important; border-radius: 999px !important;
+  border: 1px solid rgba(255,255,255,.16) !important;
+  background: rgba(14,14,16,.8) !important; color: #fff !important;
+  -webkit-backdrop-filter: blur(10px) !important; backdrop-filter: blur(10px) !important;
+  box-shadow: 0 3px 14px rgba(0,0,0,.35) !important;
+  font: 600 13px/1 -apple-system, system-ui, sans-serif !important;
+  cursor: pointer !important; touch-action: manipulation !important;
+  -webkit-tap-highlight-color: transparent !important; white-space: nowrap !important;
+}
+#jff-pill svg {
+  width: 17px !important; height: 17px !important; min-width: 17px !important; max-width: 17px !important;
+  min-height: 17px !important; max-height: 17px !important; display: block !important; fill: none !important;
+  stroke: currentColor !important; stroke-width: 2 !important; stroke-linecap: round !important; stroke-linejoin: round !important;
+}
+#jff-pill b { font-weight: 700 !important; }
 #jff-toast {
   position: fixed !important; left: 50% !important;
   bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important;
@@ -210,6 +238,8 @@
 
   function buildBar() {
     if (bar || !document.body) return;
+    const pill = document.getElementById('jff-pill');
+    if (pill) pill.remove();          // the player exists now, so the pre-player hint is redundant
     injectStyle();
 
     bar = document.createElement('div');
@@ -390,6 +420,29 @@
   new MutationObserver(sweep).observe(document.documentElement, { childList: true, subtree: true });
   setInterval(sweep, 2000);
 
+  // A film page shows nothing at all until the player exists, which reads as "the script is not
+  // running". Surface the saved position at once as a small pill; it disappears once the bar appears.
+  async function resumePill() {
+    if (document.getElementById('jff-pill') || document.getElementById('jff-bar')) return;
+    try { if (localStorage.getItem('jff:bar:hidden') === '1') return; } catch (e) {}
+    const p = await getPos().catch(() => null);
+    if (!p) return;
+    injectStyle();
+    const el = document.createElement('div');
+    el.id = 'jff-pill';
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.title = 'Saved position for this film';
+    el.innerHTML = ICON.clock + '<span>Resume <b>' + fmt(p.t) + '</b></span>';
+    el.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const v = video();
+      if (v && isFinite(v.duration) && v.duration > 0) { v.currentTime = p.t; toast('Jumped to ' + fmt(p.t)); }
+      else toast('Player not ready — it will resume at ' + fmt(p.t) + ' automatically');
+    });
+    if (document.body) document.body.appendChild(el);
+  }
+
   // Desktop / hardware-keyboard extras (harmless on iOS, where there is no keyboard)
   document.addEventListener('keydown', (e) => {
     const t = e.target;
@@ -421,7 +474,7 @@
     search: stroked('<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>'),
     refresh: stroked('<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>' +
                      '<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>'),
-    clock: stroked('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>')
+    clock: ICON.clock
   };
 
   const esc = (s) => String(s == null ? '' : s)
@@ -919,6 +972,8 @@
   }
 
   if (isListingPage) initExplore().catch((e) => log('explore failed', e));
+  else resumePill().catch(() => {});
 
-  log('ready — ' + (hasGM ? 'GM storage' : 'localStorage') + (isListingPage ? ' · explore page' : ' · player'));
+  log('ready — ' + (hasGM ? 'GM storage' : 'localStorage') + (isListingPage ? ' · explore page' : ' · film page')
+      + (gmInfo ? ' · manager: ' + gmInfo : ''));
 })();

@@ -75,6 +75,35 @@ Install the same file; the bar and keyboard shortcuts both work.
 - The player element is located by `document.querySelectorAll('video')`. If JFF rewrites its player,
   this needs updating.
 
+## Troubleshooting (iOS "Userscripts" app)
+
+The app only learns about scripts when **its own popup loads the scripts directory**. After dropping a
+`.user.js` file in — from Files, iCloud, an editor — open the extension popup once (Safari `AA` button
+→ Extensions → Userscripts). Until you do, the file sits on disk and is never injected, which looks
+exactly like "the script is not detected".
+
+Checklist:
+
+1. The file must be in the directory the app was pointed at (`Set Userscripts Directory`; set
+   automatically since iOS app v1.5.0). A file saved from Telegram lands in Downloads, **not** there.
+2. The extension must be enabled and allowed for the site: Settings → Safari → Extensions →
+   Userscripts → *Always Allow* for *All Websites*.
+3. Open the extension popup and let it load completely — that is what rescans the directory.
+4. In the popup, check the matched-userscripts list for the page, and turn on *Show Toolbar Count* in
+   the app settings: the toolbar badge shows how many enabled scripts match the current URL. **Zero**
+   means the `@match` pattern is not matching (or the script is toggled off) — not that the script is
+   broken.
+5. On iOS 18+ keep an iCloud folder downloaded (*Keep Downloaded*); an evicted file can be unreadable.
+6. Still nothing? Install `jff-check.user.js` from this repository: it draws a banner on any JFF page
+   proving a manager injected code, and reports the manager name and version. If even that banner is
+   missing, the problem is the app's directory or permissions, not this script.
+7. The script works in either injection context. If the app uses `@inject-into auto` and lands in the
+   page context, `GM.setValue` is unavailable (that is an app rule, not a bug) and the script falls
+   back to `localStorage` automatically.
+
+Visible signs it is running: the catalogue page is replaced by the explore rows, and a film page shows a
+small **Resume 42:10** pill immediately — before you press play, when the player does not exist yet.
+
 ## Development
 
 `stub.html`, `stub-ios.html`, `stub-hostile.html` and `stub-explore.html` are harness pages used to
