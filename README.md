@@ -44,15 +44,6 @@ Japan Foundation's terms and to copyright law.
 
 Install the same file; the bar and keyboard shortcuts both work.
 
-## Limitations
-
-- The resume seek was verified against a stubbed player, **not** against the production DRM stream —
-  the site's player is behind a login. If the seek does not land, check the console for `[jff-resume]`
-  lines.
-- Picture-in-picture is blocked by some DRM playback paths; the button reports when it fails.
-- The player element is located by `document.querySelectorAll('video')`. If JFF rewrites its player,
-  this needs updating.
-
 ## Troubleshooting (iOS "Userscripts" app)
 
 The app only learns about scripts when **its own popup loads the scripts directory**. After dropping a
