@@ -22,11 +22,24 @@
   const iso = (ms) => new Date(ms).toISOString().slice(0, 19);
   const now = Date.now();
 
+  function tile(code, label) {
+    let hash = 0;
+    for (let i = 0; i < code.length; i++) hash = (hash * 31 + code.charCodeAt(i)) % 360;
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="272" height="408">' +
+      '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">' +
+      '<stop offset="0" stop-color="hsl(' + hash + ',45%,26%)"/>' +
+      '<stop offset="1" stop-color="hsl(' + ((hash + 40) % 360) + ',50%,14%)"/></linearGradient></defs>' +
+      '<rect width="272" height="408" fill="url(#g)"/>' +
+      '<text x="20" y="360" fill="#fff" font-family="system-ui" font-size="22" font-weight="700">' +
+      label.replace(/[<>&]/g, '') + '</text></svg>';
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  }
+
   function mk(code, title, titleEn, opts) {
     opts = opts || {};
     const e = {
       contentsCode: code, contentsTitle: title, contentsTitleEn: titleEn,
-      poster: opts.poster === null ? null : ('poster-' + code + '.jpg'),
+      poster: opts.poster === null ? null : (opts.poster || tile(code, titleEn || title)),
       thumbnail: 'thumb-' + code + '.jpg',
       streamStart: iso(now + (opts.startOffset === undefined ? -10 * DAY : opts.startOffset)),
       streamEnd: iso(now + (opts.endOffset === undefined ? 30 * DAY : opts.endOffset)),
@@ -42,7 +55,7 @@
   window.__catalogue = [
     mk('D-LIVE1', 'ミックス。', 'MIXED DOUBLES', { endOffset: 5 * DAY, ratedFor: 'id' }),
     mk('D-LIVE2', 'ちはやふる', 'CHIHAYAFURU', {}),
-    mk('D-LIVE3', '舟を編む', 'THE GREAT PASSAGE', { caps: ['en'] }),
+    mk('D-LIVE3', '舟を編む', 'THE GREAT PASSAGE', { caps: ['en'], poster: 'does-not-exist.jpg' }),
     mk('D-LIVE4', 'そして父になる', 'LIKE FATHER, LIKE SON', { endOffset: 200 * DAY }),
     mk('D-LIVE5', '舞妓はレディ', 'LADY MAIKO', { countries: ['sg', 'my'] }),
     mk('D-LIVE6', '百円の恋', '100 YEN LOVE', { endOffset: 12 * DAY }),

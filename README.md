@@ -33,6 +33,8 @@ Japan Foundation's terms and to copyright law.
 
 ## Explore page
 
+![Explore page](preview-explore-desktop.png)
+
 The catalogue endpoint (`/jff-api/contents`, ~7 MB of JSON for 274 titles) is fetched once, trimmed to
 the fields the UI needs and cached in `localStorage` for six hours (~3 KB), so browsing costs one
 request every six hours.

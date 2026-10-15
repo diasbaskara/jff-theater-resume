@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JFF Theater — Explore, Resume + Playback Controls
 // @namespace    https://github.com/diasbaskara
-// @version      1.2.0
+// @version      1.2.1
 // @description  Netflix-style browse page for the JFF Theater catalogue (Continue watching, Available now, Ending soon, search), plus resume and touch playback controls on the film pages. Reads the site's own public catalogue API; collects nothing, downloads no media, circumvents no DRM.
 // @author       Hermes Agent (for Dias)
 // @license      MIT
@@ -644,7 +644,7 @@
       badges.push('<span class="jff-x-badge jff-x-warn">other region</span>');
     }
     const poster = it.img
-      ? '<img src="' + esc(it.img) + '" alt="" loading="lazy" decoding="async">'
+      ? '<img src="' + esc(it.img) + '" alt="" loading="lazy" decoding="async" data-title="' + esc(it.title) + '">'
       : '<div class="jff-x-fallback">' + esc(it.title) + '</div>';
     let bar = '';
     if (histPos && histPos.d) {
@@ -839,6 +839,20 @@
       state.filter = chip.getAttribute('data-filter') || 'all';
       render();
     });
+    // a poster that fails to load falls back to the title tile instead of a broken image
+    root.addEventListener('error', (e) => {
+      const img = e.target;
+      if (!img || img.tagName !== 'IMG' || !img.closest('.jff-x-poster')) return;
+      const holder = img.parentNode;
+      const label = img.getAttribute('data-title') || '';
+      img.remove();
+      if (holder && !holder.querySelector('.jff-x-fallback')) {
+        const fb = document.createElement('div');
+        fb.className = 'jff-x-fallback';
+        fb.textContent = label;
+        holder.insertBefore(fb, holder.firstChild);
+      }
+    }, true);
     qEl.addEventListener('input', () => { state.q = qEl.value; render(); });
     countryEl.addEventListener('change', () => {
       state.country = countryEl.value;
