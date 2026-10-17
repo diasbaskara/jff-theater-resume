@@ -44,6 +44,24 @@ Japan Foundation's terms and to copyright law.
 
 Install the same file; the bar and keyboard shortcuts both work.
 
+**Home Screen icon on iOS — read this before you add one**
+
+A website added to the Home Screen as a *web app* runs in its own standalone container, and **Safari
+extensions cannot run there** — Apple provides no setting for it (macOS web apps do support extensions;
+iOS and iPadOS do not). So the plain web app icon will never show the resume pill or the control bar.
+
+Add it the other way round instead:
+
+1. Open the film or `https://id.jff.jpf.go.jp/` in Safari.
+2. Share → **Add to Home Screen**.
+3. Turn **Open as Web App** *off*. (iOS 26 and later turns it on by default, so check it.)
+4. Tap **Add**.
+
+The icon looks the same, but tapping it opens the site as a normal Safari tab — where Userscripts is
+active and the script runs. If you already added it as a web app, delete that icon first, then repeat
+the steps above; the standalone container keeps its own storage, so the saved position would not carry
+across anyway.
+
 ## Troubleshooting (iOS "Userscripts" app)
 
 The app only learns about scripts when **its own popup loads the scripts directory**. After dropping a
